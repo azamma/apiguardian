@@ -1,0 +1,31 @@
+{
+  "description": "Whitelist PUBLIC - Endpoints que tienen autenticación en el API Gateway PUBLIC",
+  "type": "PUBLIC",
+  "notes": [
+    "Endpoints con sufijo PUBLIC en el nombre de la API Gateway",
+    "Tienen autenticación implementada en la capa pública",
+    "Se soportan patrones simples con * para comodín"
+  ],
+  "whitelist": {
+    "MS-Auth-Server-Public-PROD": [
+      "/oauth/token",
+      "/oauth/authorize",
+      "/oauth/validate",
+      "/auth/login",
+      "/auth/logout"
+    ],
+    "MS-Customer-Public-PROD": [
+      "/customer/register",
+      "/customer/validate",
+      "/customer/*/profile"
+    ],
+    "MS-jumio-Public-PROD": [
+      "/jumio/verification/*",
+      "/jumio/status"
+    ],
+    "MS-mfa-Public-PROD": [
+      "/mfa/verify",
+      "/mfa/challenge"
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+include README.md
+include LICENSE
+include whitelist.json
+recursive-include security_check *.py

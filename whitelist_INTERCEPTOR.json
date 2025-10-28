@@ -1,0 +1,22 @@
+{
+  "description": "Whitelist INTERCEPTOR - Endpoints que tienen autenticación en el API Gateway INTERCEPTOR",
+  "type": "INTERCEPTOR",
+  "notes": [
+    "Endpoints con sufijo INTERCEPTOR en el nombre de la API Gateway",
+    "Tienen autenticación implementada a nivel de interceptor/middleware",
+    "Se soportan patrones simples con * para comodín"
+  ],
+  "whitelist": {
+    "MS-Identification-Provider-PROD": [
+      "/identification/*/verify",
+      "/identification/check"
+    ],
+    "Partner-Comafi": [
+      "/comafi/webhook",
+      "/comafi/callback"
+    ],
+    "Quotes-Partner-API": [
+      "/quote"
+    ]
+  }
+}

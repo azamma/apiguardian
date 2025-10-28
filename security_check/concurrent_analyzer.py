@@ -140,26 +140,18 @@ class ConcurrentAnalyzer:
                     if progress_callback:
                         progress_callback(result)
 
-                except TimeoutError:
-                    result = AnalysisResult(
-                        api_id=api.get("id", "UNKNOWN"),
-                        api_name=api.get("name", "UNKNOWN"),
-                        success=False,
-                        error=f"Timeout después de {self.timeout}s",
-                        execution_time=self.timeout
+                except (TimeoutError, Exception) as e:
+                    error_msg = (
+                        f"Timeout después de {self.timeout}s"
+                        if isinstance(e, TimeoutError)
+                        else f"Error: {str(e)}"
                     )
-                    results.append(result)
-
-                    if progress_callback:
-                        progress_callback(result)
-
-                except Exception as e:
                     result = AnalysisResult(
                         api_id=api.get("id", "UNKNOWN"),
                         api_name=api.get("name", "UNKNOWN"),
                         success=False,
-                        error=f"Error: {str(e)}",
-                        execution_time=0.0
+                        error=error_msg,
+                        execution_time=self.timeout if isinstance(e, TimeoutError) else 0.0
                     )
                     results.append(result)
 

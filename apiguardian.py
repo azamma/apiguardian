@@ -14,21 +14,49 @@ Features:
 - Endpoint whitelist support
 """
 
-import subprocess
-import json
-import sys
-import os
+# === IMPORTS ===
+# Standard library imports (grouped first per PEP8)
 import csv
 import datetime
+import json
+import os
 import re
-from typing import Dict, List, Optional, Tuple
-from pathlib import Path
+import subprocess
+import sys
+import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 
-# ===================================================================
-# SECCIÓN 0: SISTEMA DE LOGGING CON COLORES
-# ===================================================================
+# === SECCIÓN 0: CONSTANTES DE CONFIGURACIÓN ===
+
+# API Filtering
+EXCLUDED_API_SUFFIXES: Tuple[str, ...] = ('-DEV', '-CI')
+"""Sufijos de API a excluir del análisis automático."""
+
+# HTTP Methods
+EXCLUDED_HTTP_METHODS: Tuple[str, ...] = ('OPTIONS',)
+"""Métodos HTTP a excluir del análisis."""
+
+# Authorization Types that count as "proper auth"
+PROPER_AUTH_TYPES: Tuple[str, ...] = ('CUSTOM', 'AWS_IAM', 'COGNITO_USER_POOLS')
+"""Tipos de autorización que se consideran protección válida."""
+
+# Pool Sizes
+DEFAULT_RESOURCE_POOL_SIZE: int = 5
+"""Tamaño de pool por defecto para procesamiento paralelo de recursos."""
+
+MAX_RESOURCE_POOL_SIZE: int = 10
+"""Tamaño máximo de pool permitido."""
+
+# Authorizer Cache
+AUTHORIZER_CACHE_RESOURCE_POOL_SIZE: int = 10
+"""Pool size para recolección paralela de IDs de autorizadores."""
+
+
+# === SECCIÓN 1: SISTEMA DE LOGGING CON COLORES ===
 
 class Colors:
     """ANSI color codes for terminal output."""
@@ -59,6 +87,57 @@ def log_warning(msg: str) -> None:
 def log_error(msg: str) -> None:
     """Log error message in red."""
     print(f"{Colors.ERROR}[ERROR]{Colors.RESET} {msg}")
+
+
+def clear_screen() -> None:
+    """Clear terminal screen in a cross-platform way."""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def show_splash_screen() -> None:
+    """Display API Guardian splash screen with ASCII eagle."""
+    # Clear screen first
+    clear_screen()
+
+    eagle_ascii = """
+
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣲⣶⠒⠷⠶⠤⠴⠦⠤⠤⢤⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣴⣶⠚⠛⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠑⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡠⠴⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠤⢌⣛⠶⢤⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⢚⠟⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠱⡄⠙⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡤⠖⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⣀⠀⣀⣤⣧⠔⠛⠓⠲⠤⢄⣀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⢐⠟⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⣀⣤⣄⣠⣤⣴⣾⣿⣿⣾⡗⠀⢀⣀⢤⠐⠠⠤⣉⠓⠦⣄⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⢀⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠒⠒⠶⠶⢾⣿⡿⠛⢻⣻⠛⢻⣿⣿⠟⣋⣺⣿⠏⠀⠴⠿⠹⠋⠀⠀⠀⠀⠈⠀⠨⠳⣄⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢐⠟⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣤⣤⠤⠄⠐⢾⣿⣝⠤⣀⢀⡠⣱⣿⣿⣿⣿⠿⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⡆⠀
+⠀⠀⠀⠀⠀⠀⢠⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢉⣛⣺⣿⣾⣛⣽⣿⡟⠁⠀⠀⢀⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡀
+⠀⠀⠀⠀⠀⠐⡟⠀⠀⠀⠀⡠⠖⠀⠀⠀⢀⡴⠃⠀⠀⠀⠀⠀⠀⡈⠉⢉⡽⠿⢛⡿⢛⠯⠭⣒⣚⣩⣭⣭⣤⡤⠭⠭⢭⣥⣀⣉⣑⣒⢵⡀⠀⠀⢸⡇
+⠀⠀⠀⠀⠀⣰⠃⠀⢀⡔⠋⠀⠀⠀⣠⡴⠋⠀⠀⠀⠀⣠⣤⡴⠋⠀⠀⠀⠀⠀⠾⢶⣾⣿⣿⣿⣿⣿⣿⡿⠋⠀⠀⠀⠀⠀⠀⠀⠈⠉⠉⠳⡀⠀⣸⠃
+⠀⠀⠀⠀⢰⠟⢀⣴⠏⠀⡀⢀⣴⡿⠋⠀⠀⠀⢀⡴⠟⠋⠁⠀⠀⠀⠀⢀⣠⣴⣾⣿⣿⣿⣿⣿⣿⡿⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⣇⠔⠁⠀
+⠀⠀⠀⠀⣞⣴⣿⠃⢠⣾⣴⣿⠋⠀⠀⠀⠀⠐⠋⠀⠀⠀⠀⠀⢐⣚⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠋⠁⠀⠀⠀
+⠀⠀⠀⣸⣿⣿⣧⣶⣿⣿⣿⠗⠁⠀⡠⠂⠀⢀⠀⠀⠀⠀⠂⢉⣭⣿⣿⣿⣿⣿⣿⣿⣿⣿⠛⡟⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⢀⠼⢻⣿⣿⣿⣿⣿⣿⠁⢀⣴⠏⢀⣠⠞⠁⢀⠀⠀⠀⣠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⠀⠱⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⣠⣿⣿⣿⣿⣿⣿⣧⣾⡿⣡⣾⣿⠃⣠⡾⠁⠀⣀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⠂⠀⢻⣍⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠈⣽⣿⣿⣿⣿⣿⣿⡟⠉⣰⣿⡿⣡⣾⣿⣴⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀⢻⣶⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⣠⣿⣿⣿⣿⣿⣿⣿⣤⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠋⣱⣿⣿⣿⣿⣿⣿⣿⣿⠃⠀⠀⢸⣾⣿⣧⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠐⠛⢹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⢫⣿⠏⠀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣼⡄⠀⣿⣿⡏⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⣾⡿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢟⣴⡿⢋⣴⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣤⣿⣿⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠁⠀⡿⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⠿⣦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠸⣿⣿⣿⣿⣿⣿⣿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣿⢿⡿⠁⣿⠏⠘⢿⣿⣿⣿⠋⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠿⠋⣿⡿⠋⣸⠟⠁⠀⣾⣿⣿⣿⣿⣿⠟⠁⠈⠀⠀⠹⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠀⠉⠀⠀⠰⠿⣿⣿⠿⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⡏⠀⠻⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+
+         🦅 API GUARDIAN 🦅
+     AWS API Gateway Security Auditor
+              v1.0.0
+
+    """
+
+    print(f"{Colors.INFO}{eagle_ascii}{Colors.RESET}")
+    time.sleep(3)
+    clear_screen()
 
 
 def log_section(title: str) -> None:
@@ -99,9 +178,7 @@ def save_error_dump(
         exception: Exception (optional) to include full traceback.
     """
     try:
-        # Ensure reports/ folder exists
         reports_dir = ensure_reports_directory()
-
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         error_file = (
             reports_dir /
@@ -115,7 +192,6 @@ def save_error_dump(
             )
             f.write(f"Error Message: {error_msg}\n\n")
             if exception:
-                import traceback
                 f.write("Full Traceback:\n")
                 f.write(traceback.format_exc())
         log_error(f"Error dump saved to: {error_file}")
@@ -397,29 +473,45 @@ def get_authorizer_details(api_id: str, authorizer_id: str) -> Optional[Dict]:
 # SECCIÓN 2: FILTRADO DE APIs Y MÉTODOS
 # ===================================================================
 
-def load_whitelist() -> Dict[str, List[str]]:
+def load_whitelist() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
     """
-    Load the endpoint whitelist from whitelist.json (same directory as script).
+    Load whitelists from PUBLIC and INTERCEPTOR files.
 
     Returns:
-        Dictionary with API names as keys and endpoint lists as values.
-        Empty dict if file doesn't exist or has errors.
+        Tuple of (public_whitelist, interceptor_whitelist) dictionaries.
+        Empty dicts if files don't exist or have errors.
     """
+    public_whitelist = {}
+    interceptor_whitelist = {}
+
     try:
-        # Look for whitelist.json in the same directory as this script
-        whitelist_file = Path(__file__).parent / "whitelist.json"
-        if not whitelist_file.exists():
-            return {}
-
-        with open(whitelist_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data.get('whitelist', {})
+        # Load PUBLIC whitelist
+        public_file = Path(__file__).parent / "whitelist_PUBLIC.json"
+        if public_file.exists():
+            with open(public_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                public_whitelist = data.get('whitelist', {})
     except Exception as e:
-        log_warning(f"Failed to load whitelist: {str(e)}")
-        return {}
+        log_warning(f"Failed to load PUBLIC whitelist: {str(e)}")
+
+    try:
+        # Load INTERCEPTOR whitelist
+        interceptor_file = Path(__file__).parent / "whitelist_INTERCEPTOR.json"
+        if interceptor_file.exists():
+            with open(interceptor_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                interceptor_whitelist = data.get('whitelist', {})
+    except Exception as e:
+        log_warning(f"Failed to load INTERCEPTOR whitelist: {str(e)}")
+
+    return public_whitelist, interceptor_whitelist
 
 
-def is_endpoint_whitelisted(api_name: str, path: str, whitelist: Dict[str, List[str]]) -> bool:
+def is_endpoint_whitelisted(
+    api_name: str,
+    path: str,
+    whitelist: Dict[str, List[str]]
+) -> bool:
     """
     Check if an endpoint is in the whitelist.
 
@@ -454,6 +546,55 @@ def is_endpoint_whitelisted(api_name: str, path: str, whitelist: Dict[str, List[
     return False
 
 
+def get_whitelist_source(
+    api_name: str,
+    path: str,
+    public_whitelist: Dict[str, List[str]],
+    interceptor_whitelist: Dict[str, List[str]]
+) -> str:
+    """
+    Determine whitelist source(s) for an endpoint.
+
+    Returns "PUBLIC", "INTERCEPTOR", "BOTH", or "NO" depending on
+    where the endpoint appears in the whitelists.
+
+    Args:
+        api_name: Name of the API.
+        path: Resource path.
+        public_whitelist: PUBLIC whitelist dictionary.
+        interceptor_whitelist: INTERCEPTOR whitelist dictionary.
+
+    Returns:
+        Whitelist source: "PUBLIC", "INTERCEPTOR", "BOTH", or "NO".
+    """
+    in_public = is_endpoint_whitelisted(api_name, path, public_whitelist)
+    in_interceptor = is_endpoint_whitelisted(
+        api_name, path, interceptor_whitelist
+    )
+
+    if in_public and in_interceptor:
+        return "BOTH"
+    elif in_public:
+        return "PUBLIC"
+    elif in_interceptor:
+        return "INTERCEPTOR"
+    else:
+        return "NO"
+
+
+def _has_proper_authorization(auth_type: Optional[str]) -> bool:
+    """
+    Check if an authorization type is considered proper authentication.
+
+    Args:
+        auth_type: The authorization type to check.
+
+    Returns:
+        True if auth_type is a proper authorization, False otherwise.
+    """
+    return auth_type in PROPER_AUTH_TYPES
+
+
 def filter_apis_by_suffix(apis: List[Dict]) -> List[Dict]:
     """
     Filter out APIs with -DEV or -CI suffixes.
@@ -464,10 +605,12 @@ def filter_apis_by_suffix(apis: List[Dict]) -> List[Dict]:
     Returns:
         Filtered list of APIs.
     """
-    excluded_suffixes = ['-DEV', '-CI']
     return [
         api for api in apis
-        if not any(api['name'].endswith(suffix) for suffix in excluded_suffixes)
+        if not any(
+            api['name'].endswith(suffix)
+            for suffix in EXCLUDED_API_SUFFIXES
+        )
     ]
 
 
@@ -481,7 +624,11 @@ def filter_options_methods(methods: Dict) -> Dict:
     Returns:
         Filtered dictionary without OPTIONS method.
     """
-    return {k: v for k, v in methods.items() if k != 'OPTIONS'}
+    return {
+        method: config
+        for method, config in methods.items()
+        if method not in EXCLUDED_HTTP_METHODS
+    }
 
 
 # ===================================================================
@@ -495,7 +642,8 @@ def analyze_resource_methods(
     report_file: Optional[Path] = None,
     api_name: Optional[str] = None,
     authorizer_cache: Optional[Dict[str, Dict]] = None,
-    whitelist: Optional[Dict[str, List[str]]] = None
+    public_whitelist: Optional[Dict[str, List[str]]] = None,
+    interceptor_whitelist: Optional[Dict[str, List[str]]] = None
 ) -> Dict:
     """
     Analyze methods for a resource sequentially.
@@ -565,14 +713,18 @@ def analyze_resource_methods(
 
         result_methods.append(method_auth)
 
-        # Update report in real-time (include whitelisted status)
+        # Update report in real-time (include whitelist source)
         if report_file and api_name:
-            is_whitelisted = (
-                whitelist and
-                is_endpoint_whitelisted(api_name, path, whitelist)
-            )
-            # Pass whitelisted status to report
-            method_auth['whitelisted'] = is_whitelisted
+            whitelist_source = "NO"
+            if public_whitelist or interceptor_whitelist:
+                whitelist_source = get_whitelist_source(
+                    api_name,
+                    path,
+                    public_whitelist or {},
+                    interceptor_whitelist or {}
+                )
+            # Pass whitelist source to report
+            method_auth['whitelist_source'] = whitelist_source
             update_report_file(report_file, api_name, method_auth)
 
     return {
@@ -724,6 +876,87 @@ def build_authorizer_cache(
     return authorizer_cache
 
 
+def _print_api_analysis_header(
+    api_name: str,
+    api_id: str,
+    current_index: int,
+    total_apis: int
+) -> None:
+    """
+    Print header for API analysis.
+
+    Args:
+        api_name: API name.
+        api_id: API ID.
+        current_index: Current index (1-based).
+        total_apis: Total APIs to analyze.
+    """
+    print(
+        f"\n{Colors.INFO}[{current_index}/{total_apis}]{Colors.RESET} "
+        f"Scanning: {Colors.INFO}{api_name}{Colors.RESET} "
+        f"{Colors.DEBUG}({api_id}){Colors.RESET}"
+    )
+    sys.stdout.flush()
+
+
+def _print_resource_status(path: str, method_statuses: List[str]) -> None:
+    """
+    Print resource analysis results.
+
+    Args:
+        path: Resource path.
+        method_statuses: List of method status strings.
+    """
+    print(f"  {Colors.DEBUG}  ├─ {path}{Colors.RESET}")
+    method_display = " | ".join(method_statuses)
+    print(
+        f"  {Colors.DEBUG}  │  └─ Methods: "
+        f"{method_display}{Colors.RESET}"
+    )
+    sys.stdout.flush()
+
+
+def _print_api_summary(
+    protected_count: int,
+    unprotected_count: int,
+    resources_scanned: int,
+    total_methods: int,
+    methods_filtered_total: int
+) -> None:
+    """
+    Print API analysis summary.
+
+    Args:
+        protected_count: Number of protected endpoints.
+        unprotected_count: Number of unprotected endpoints.
+        resources_scanned: Number of resources scanned.
+        total_methods: Total methods analyzed.
+        methods_filtered_total: Total OPTIONS methods filtered.
+    """
+    print(
+        f"  {Colors.DEBUG}└─ Scanned {resources_scanned} resources "
+        f"with {total_methods} methods{Colors.RESET}"
+    )
+    if methods_filtered_total > 0:
+        print(
+            f"  {Colors.DEBUG}   └─ Filtered out {methods_filtered_total} "
+            f"OPTIONS method(s){Colors.RESET}"
+        )
+
+    if unprotected_count > 0:
+        print(
+            f"  {Colors.SUCCESS}✓{Colors.RESET} {protected_count} protected "
+            f"| {Colors.ERROR}⚠ {unprotected_count} unprotected{Colors.RESET}"
+        )
+    else:
+        print(
+            f"  {Colors.SUCCESS}✓{Colors.RESET} {protected_count} protected "
+            f"| All secure!"
+        )
+
+    sys.stdout.flush()
+
+
 def check_api_security(
     api_id: str,
     api_name: str,
@@ -732,7 +965,8 @@ def check_api_security(
     report_file: Optional[Path] = None,
     use_resource_pool: bool = True,
     resource_pool_size: int = 5,
-    whitelist: Optional[Dict[str, List[str]]] = None
+    public_whitelist: Optional[Dict[str, List[str]]] = None,
+    interceptor_whitelist: Optional[Dict[str, List[str]]] = None
 ) -> Dict:
     """
     Review API resources and identify those without authorizer.
@@ -754,12 +988,7 @@ def check_api_security(
     Returns:
         Dictionary with analysis result.
     """
-    print(
-        f"\n{Colors.INFO}[{current_index}/{total_apis}]{Colors.RESET} "
-        f"Scanning: {Colors.INFO}{api_name}{Colors.RESET} "
-        f"{Colors.DEBUG}({api_id}){Colors.RESET}"
-    )
-    sys.stdout.flush()
+    _print_api_analysis_header(api_name, api_id, current_index, total_apis)
 
     resources = get_resources(api_id)
     if resources is None:
@@ -828,7 +1057,8 @@ def check_api_security(
                 report_file,
                 api_name,
                 authorizer_cache,
-                whitelist
+                public_whitelist,
+                interceptor_whitelist
             )
             future_to_resource[future] = (resource_id, path)
 
@@ -849,9 +1079,8 @@ def check_api_security(
 
                 for method_auth in methods_list:
                     # Only count proper authorization (not API key alone)
-                    has_proper_auth = (
-                        method_auth.get('authorizationType') in
-                        {'CUSTOM', 'AWS_IAM', 'COGNITO_USER_POOLS'}
+                    has_proper_auth = _has_proper_authorization(
+                        method_auth.get('authorizationType')
                     )
 
                     if has_proper_auth:
@@ -868,13 +1097,7 @@ def check_api_security(
                         )
 
                 # Show resource
-                print(f"  {Colors.DEBUG}  ├─ {path}{Colors.RESET}")
-                method_display = " | ".join(method_statuses)
-                print(
-                    f"  {Colors.DEBUG}  │  └─ Methods: "
-                    f"{method_display}{Colors.RESET}"
-                )
-                sys.stdout.flush()
+                _print_resource_status(path, method_statuses)
 
             except Exception as e:
                 log_error(f"Error analyzing resource {resource_id}: {str(e)}")
@@ -883,28 +1106,13 @@ def check_api_security(
     protected_count = len(resources_with_auth)
     unprotected_count = len(resources_without_auth)
 
-    print(
-        f"  {Colors.DEBUG}└─ Scanned {resources_scanned} resources "
-        f"with {total_methods} methods{Colors.RESET}"
+    _print_api_summary(
+        protected_count,
+        unprotected_count,
+        resources_scanned,
+        total_methods,
+        methods_filtered_total
     )
-    if methods_filtered_total > 0:
-        print(
-            f"  {Colors.DEBUG}   └─ Filtered out {methods_filtered_total} "
-            f"OPTIONS method(s){Colors.RESET}"
-        )
-
-    if unprotected_count > 0:
-        print(
-            f"  {Colors.SUCCESS}✓{Colors.RESET} {protected_count} protected "
-            f"| {Colors.ERROR}⚠ {unprotected_count} unprotected{Colors.RESET}"
-        )
-    else:
-        print(
-            f"  {Colors.SUCCESS}✓{Colors.RESET} {protected_count} protected "
-            f"| All secure!"
-        )
-
-    sys.stdout.flush()
 
     return {
         'api_id': api_id,
@@ -928,7 +1136,7 @@ def print_security_report(results: List[Dict]) -> None:
     Args:
         results: List of analysis results.
     """
-    log_section("API GATEWAY SECURITY CHECK REPORT")
+    log_section("API GUARDIAN - SECURITY REPORT")
 
     total_apis = len(results)
     total_unprotected = sum(
@@ -1062,10 +1270,9 @@ def create_consolidated_report_file(api_name: Optional[str] = None) -> Optional[
                     'path',
                     'is_authorized',
                     'authorization_type',
-                    'specific_auth_type',
                     'authorizer_name',
                     'api_key',
-                    'whitelisted'
+                    'whitelist'
                 ]
             )
             writer.writeheader()
@@ -1095,20 +1302,19 @@ def update_report_file(
         True if updated successfully, False otherwise.
     """
     try:
-        # Check for API Key requirement
-        has_api_key = resource_data.get("apiKeyRequired", False)
-
         # Determine if it has proper authorization (not just API key)
-        has_proper_auth = (
-            resource_data.get("authorizationType") in
-            {'CUSTOM', 'AWS_IAM', 'COGNITO_USER_POOLS'}
+        has_proper_auth = _has_proper_authorization(
+            resource_data.get("authorizationType")
         )
 
         # is_authorized should be YES only if there's proper authorization (not API key alone)
         is_authorized = 'YES' if has_proper_auth else 'NO'
 
-        # Check if whitelisted
-        is_whitelisted = resource_data.get('whitelisted', False)
+        # Get whitelist source
+        whitelist_source = resource_data.get('whitelist_source', 'NO')
+
+        # Check for API Key requirement
+        has_api_key = resource_data.get("apiKeyRequired", False)
 
         # Prepare row for CSV
         row = {
@@ -1119,14 +1325,9 @@ def update_report_file(
             'authorization_type': (
                 resource_data.get('authorizationType') or 'NONE'
             ),
-            'specific_auth_type': (
-                resource_data.get('specificAuthType') or
-                resource_data.get('authorizationType') or
-                'NONE'
-            ),
             'authorizer_name': resource_data.get('authorizerName') or 'NONE',
             'api_key': 'YES' if has_api_key else 'NO',
-            'whitelisted': 'YES' if is_whitelisted else 'NO'
+            'whitelist': whitelist_source
         }
 
         # Add row to CSV
@@ -1139,10 +1340,9 @@ def update_report_file(
                     'path',
                     'is_authorized',
                     'authorization_type',
-                    'specific_auth_type',
                     'authorizer_name',
                     'api_key',
-                    'whitelisted'
+                    'whitelist'
                 ]
             )
             writer.writerow(row)
@@ -1182,40 +1382,79 @@ def save_security_report(results: List[Dict]) -> Optional[str]:
         return None
 
 
+def save_api_summary_report(results: List[Dict]) -> Optional[str]:
+    """
+    Save API summary report to CSV file.
+
+    Generates a summary CSV with one row per API showing:
+    - API Name
+    - Total Endpoints (resources with methods)
+    - Protected Endpoints
+    - Unprotected Endpoints
+
+    Args:
+        results: List of analysis results.
+
+    Returns:
+        Path to created file or None.
+    """
+    try:
+        reports_dir = ensure_reports_directory()
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        summary_file = (
+            reports_dir / f"api_summary_{timestamp}.csv"
+        )
+
+        with open(summary_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    'api_name',
+                    'total_endpoints',
+                    'protected_endpoints',
+                    'unprotected_endpoints',
+                    'security_status'
+                ]
+            )
+            writer.writeheader()
+
+            for result in results:
+                if result.get('error'):
+                    # Skip APIs with errors
+                    continue
+
+                api_name = result.get('api_name', 'N/A')
+                protected = len(result.get('resources_with_auth', []))
+                unprotected = len(result.get('resources_without_auth', []))
+                total = protected + unprotected
+
+                # Determine security status
+                if total == 0:
+                    security_status = "No endpoints"
+                elif unprotected == 0:
+                    security_status = "✓ Secure"
+                else:
+                    security_status = "⚠ At Risk"
+
+                writer.writerow({
+                    'api_name': api_name,
+                    'total_endpoints': total,
+                    'protected_endpoints': protected,
+                    'unprotected_endpoints': unprotected,
+                    'security_status': security_status
+                })
+
+        log_success(f"API summary report saved to: {summary_file}")
+        return str(summary_file)
+    except Exception as e:
+        log_error(f"Failed to save API summary report: {str(e)}")
+        return None
+
+
 # ===================================================================
 # SECCIÓN 5: ANÁLISIS CONCURRENTE
 # ===================================================================
 
-def get_pool_size() -> int:
-    """
-    Prompt user for resource pool size.
-
-    This controls parallelization of RESOURCES within each API.
-    Each API is analyzed sequentially to avoid output confusion.
-
-    Returns:
-        Pool size (between 1 and 10).
-    """
-    while True:
-        try:
-            size = input(
-                f"\n{Colors.INFO}Enter resource pool size "
-                f"(1-10, default 5):\n"
-                f"{Colors.DEBUG}(Controls parallelization within each API - "
-                f"APIs are analyzed sequentially){Colors.RESET}\n"
-                f"{Colors.INFO}> {Colors.RESET}"
-            ).strip()
-
-            if not size:
-                return 5
-
-            pool_size = int(size)
-            if 1 <= pool_size <= 10:
-                return pool_size
-            else:
-                log_warning("Please enter a value between 1 and 10")
-        except ValueError:
-            log_warning("Please enter a valid number")
 
 
 def analyze_apis_sequentially(
@@ -1230,7 +1469,7 @@ def analyze_apis_sequentially(
     before moving to the next API. This prevents output confusion and ensures
     clean reporting per API.
 
-    Skips endpoints that are whitelisted in config/whitelist.json.
+    Skips endpoints that are whitelisted in PUBLIC and INTERCEPTOR configs.
 
     Args:
         apis: List of APIs to analyze.
@@ -1243,11 +1482,22 @@ def analyze_apis_sequentially(
     results = []
     total_apis = len(apis)
 
-    # Load whitelist once at the beginning
-    whitelist = load_whitelist()
-    if whitelist:
-        num_whitelisted = sum(len(v) for v in whitelist.values())
-        log_info(f"Loaded whitelist with {len(whitelist)} API(s) and {num_whitelisted} endpoint(s)")
+    # Load whitelists once at the beginning
+    public_whitelist, interceptor_whitelist = load_whitelist()
+
+    if public_whitelist:
+        num_public = sum(len(v) for v in public_whitelist.values())
+        log_info(
+            f"Loaded PUBLIC whitelist with {len(public_whitelist)} "
+            f"API(s) and {num_public} endpoint(s)"
+        )
+
+    if interceptor_whitelist:
+        num_interceptor = sum(len(v) for v in interceptor_whitelist.values())
+        log_info(
+            f"Loaded INTERCEPTOR whitelist with {len(interceptor_whitelist)} "
+            f"API(s) and {num_interceptor} endpoint(s)"
+        )
 
     # Process each API sequentially
     for idx, api in enumerate(apis, 1):
@@ -1264,7 +1514,8 @@ def analyze_apis_sequentially(
                 report_file=report_file,
                 use_resource_pool=True,
                 resource_pool_size=resource_pool_size,
-                whitelist=whitelist
+                public_whitelist=public_whitelist,
+                interceptor_whitelist=interceptor_whitelist
             )
             results.append(result)
         except Exception as e:
@@ -1352,7 +1603,10 @@ def main() -> int:
         Exit code (0 = success, 1 = error).
     """
     try:
-        log_section("API GATEWAY SECURITY CHECK")
+        # Show splash screen
+        show_splash_screen()
+
+        log_section("API GUARDIAN")
 
         log_info("Choose operation:")
         print(f"  {Colors.SUCCESS}1{Colors.RESET} - Scan specific API")
@@ -1408,8 +1662,8 @@ def main() -> int:
             log_warning("No APIs to scan after filtering.")
             return 0
 
-        # Get pool size
-        pool_size = get_pool_size()
+        # Set pool size to default (10 concurrent workers)
+        pool_size = 10
         log_info(f"Using pool size: {pool_size} concurrent workers")
 
         print()  # Blank line for better formatting
@@ -1435,7 +1689,7 @@ def main() -> int:
         successful = sum(1 for r in results if not r.get('error'))
         failed = sum(1 for r in results if r.get('error'))
 
-        log_section("EXECUTION SUMMARY")
+        log_section("API GUARDIAN - EXECUTION SUMMARY")
 
         print_box_message(
             f"APIs Analyzed: {total_apis}\n"
@@ -1449,6 +1703,11 @@ def main() -> int:
         # Show instruction to view report
         log_info(f"\n✓ Consolidated report saved to: {consolidated_report.absolute()}")
         log_info("You can open the CSV file with Excel, Google Sheets, or any text editor")
+
+        # Generate API summary report
+        summary_report = save_api_summary_report(results)
+        if summary_report:
+            log_info(f"✓ API summary report saved to: {summary_report}")
 
         # Final summary
         total_unprotected = sum(

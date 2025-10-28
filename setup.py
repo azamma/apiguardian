@@ -3,10 +3,18 @@
 Setup script for API Guardian
 """
 
+from pathlib import Path
 from setuptools import setup, find_packages
 
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+
+# Read long description from README
+readme_file = Path(__file__).parent / "README.md"
+long_description = ""
+if readme_file.exists():
+    with open(readme_file, "r", encoding="utf-8") as fh:
+        long_description = fh.read()
+else:
+    long_description = "Automated AWS API Gateway Security Auditor"
 
 setup(
     name="api-guardian",

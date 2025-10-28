@@ -1,0 +1,27 @@
+# Whitelist configurations (can be customized locally)
+# Uncomment below if you want to track whitelist changes
+# whitelist.json
+
+# Generated reports
+reports/
+*.csv
+
+# Error logs
+error_dump_*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

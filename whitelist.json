@@ -1,0 +1,43 @@
+{
+  "description": "Whitelist de endpoints que tienen autenticación en el microservicio y deben ser excluidos del análisis de seguridad",
+  "format": "El microservicio es el nombre de la API Gateway. Los endpoints son rutas exactas o patrones (sin método HTTP).",
+  "notes": [
+    "Los endpoints se comprueban contra la ruta completa del recurso",
+    "Se soportan patrones simples con * para comodín (ej: /users/*/profile)",
+    "Un endpoint en whitelist NO aparecerá en el reporte CSV",
+    "Esto es útil para APIs que tienen autenticación en el backend del microservicio"
+  ],
+  "whitelist": {
+    "MS-Auth-Server-Public-PROD": [
+      "/oauth/token",
+      "/oauth/authorize",
+      "/oauth/validate",
+      "/auth/login",
+      "/auth/logout"
+    ],
+    "MS-Customer-Public-PROD": [
+      "/customer/register",
+      "/customer/validate",
+      "/customer/*/profile"
+    ],
+    "MS-jumio-Public-PROD": [
+      "/jumio/verification/*",
+      "/jumio/status"
+    ],
+    "MS-Identification-Provider-PROD": [
+      "/identification/*/verify",
+      "/identification/check"
+    ],
+    "MS-mfa-Public-PROD": [
+      "/mfa/verify",
+      "/mfa/challenge"
+    ],
+    "Partner-Comafi": [
+      "/comafi/webhook",
+      "/comafi/callback"
+    ],
+	"Quotes-Partner-API": [
+      "/quote"
+    ]
+  }
+}

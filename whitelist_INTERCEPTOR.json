@@ -4,8 +4,19 @@
   "notes": [
     "Endpoints con sufijo INTERCEPTOR en el nombre de la API Gateway",
     "Tienen autenticación implementada a nivel de interceptor/middleware",
-    "Se soportan patrones simples con * para comodín"
+    "Se soportan dos patrones de wildcard:",
+    "  - /path/*: Coincide con /path/anything y /path/sub/paths (prefix matching)",
+    "  - /path/*/resource: Coincide con /path/123/resource pero NO /path/123/resource/extra"
   ],
+  "examples": {
+    "example-interceptor-api": [
+      "/auth/login",
+      "/auth/validate",
+      "/webhook/jumio/*",
+      "/notifications/*/confirm",
+      "/partner/*/integration/*"
+    ]
+  },
   "whitelist": {
     "MS-Identification-Provider-PROD": [
       "/identification/*/verify",

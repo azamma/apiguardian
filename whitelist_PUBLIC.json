@@ -4,28 +4,23 @@
   "notes": [
     "Endpoints con sufijo PUBLIC en el nombre de la API Gateway",
     "Tienen autenticación implementada en la capa pública",
-    "Se soportan patrones simples con * para comodín"
+    "Se soportan dos patrones de wildcard:",
+    "  - /path/*: Coincide con /path/anything y /path/sub/paths (prefix matching)",
+    "  - /path/*/resource: Coincide con /path/123/resource pero NO /path/123/resource/extra"
   ],
-  "whitelist": {
-    "MS-Auth-Server-Public-PROD": [
+  "examples": {
+    "example-api-name": [
       "/oauth/token",
-      "/oauth/authorize",
-      "/oauth/validate",
       "/auth/login",
-      "/auth/logout"
-    ],
-    "MS-Customer-Public-PROD": [
-      "/customer/register",
-      "/customer/validate",
-      "/customer/*/profile"
-    ],
-    "MS-jumio-Public-PROD": [
-      "/jumio/verification/*",
-      "/jumio/status"
-    ],
-    "MS-mfa-Public-PROD": [
-      "/mfa/verify",
-      "/mfa/challenge"
+      "/auth/logout",
+      "/users/*/profile",
+      "/webhook/validation/*",
+      "/api/v1/public/*"
+    ]
+  },
+  "whitelist": {
+    "MS-Discounts-Public-PROD": [
+      "/webhooks"
     ]
   }
 }

@@ -45,14 +45,14 @@ PROPER_AUTH_TYPES: Tuple[str, ...] = ('CUSTOM', 'AWS_IAM', 'COGNITO_USER_POOLS')
 """Tipos de autorización que se consideran protección válida."""
 
 # Pool Sizes
-DEFAULT_RESOURCE_POOL_SIZE: int = 5
+DEFAULT_RESOURCE_POOL_SIZE: int = 30
 """Tamaño de pool por defecto para procesamiento paralelo de recursos."""
 
-MAX_RESOURCE_POOL_SIZE: int = 10
+MAX_RESOURCE_POOL_SIZE: int = 30
 """Tamaño máximo de pool permitido."""
 
 # Authorizer Cache
-AUTHORIZER_CACHE_RESOURCE_POOL_SIZE: int = 10
+AUTHORIZER_CACHE_RESOURCE_POOL_SIZE: int = 30
 """Pool size para recolección paralela de IDs de autorizadores."""
 
 
@@ -469,6 +469,99 @@ def get_authorizer_details(api_id: str, authorizer_id: str) -> Optional[Dict]:
         return None
 
 
+def get_integration_details(
+    api_id: str,
+    resource_id: str,
+    method: str
+) -> Optional[Dict]:
+    """
+    Get integration details for a method (endpoint URL, headers, etc.).
+
+    Args:
+        api_id: API ID.
+        resource_id: Resource ID.
+        method: HTTP method.
+
+    Returns:
+        Dictionary with integration details or None if integration not found.
+    """
+    success, stdout, stderr = run_command(
+        f"aws apigateway get-integration --rest-api-id {api_id} "
+        f"--resource-id {resource_id} --http-method {method} --output json"
+    )
+
+    if not success:
+        return None
+
+    try:
+        data = json.loads(stdout)
+
+        # Extract endpoint URL
+        endpoint_url = data.get('uri', '')
+
+        # Extract headers from requestParameters
+        headers = {}
+        request_params = data.get('requestParameters', {})
+        if request_params:
+            # Filter only headers (keys starting with 'method.request.header.')
+            for param_key, param_value in request_params.items():
+                if param_key.startswith('method.request.header.'):
+                    header_name = param_key.replace('method.request.header.', '')
+                    headers[header_name] = param_value
+
+        result = {
+            'uri': endpoint_url,
+            'type': data.get('type'),
+            'httpMethod': data.get('httpMethod'),
+            'headers': headers,
+            'requestParameters': request_params
+        }
+        return result
+    except json.JSONDecodeError:
+        return None
+
+
+def clean_endpoint_url(url: str) -> str:
+    """
+    Clean endpoint URL by removing stage variables.
+
+    Removes the scheme and domain part that contains stage variables,
+    keeping only the path-like portion.
+
+    Examples:
+    - "https://${stageVariables.urlDiscountsPrivate}/discounts/bo/campaigns" -> "/discounts/bo/campaigns"
+    - "https://api.example.com/users/123" -> "/users/123"
+    - "/users/123" -> "/users/123"
+    - "" -> ""
+
+    Args:
+        url: Full URL or path that may contain stage variables.
+
+    Returns:
+        Cleaned path without scheme, domain, or stage variables.
+    """
+    if not url:
+        return ""
+
+    # If it's already just a path (starts with /), return as is
+    if url.startswith('/'):
+        return url
+
+    # Parse URL to extract path
+    try:
+        # Remove scheme and domain
+        if '://' in url:
+            # Split by :// to get the part after scheme
+            after_scheme = url.split('://', 1)[1]
+            # Split by / to get path (everything after domain/stage variables)
+            if '/' in after_scheme:
+                path = '/' + after_scheme.split('/', 1)[1]
+                return path
+        return ""
+    except Exception:
+        return ""
+
+
 # ===================================================================
 # SECCIÓN 2: FILTRADO DE APIs Y MÉTODOS
 # ===================================================================
@@ -515,7 +608,9 @@ def is_endpoint_whitelisted(
     """
     Check if an endpoint is in the whitelist.
 
-    Supports simple wildcard patterns (e.g., /users/*/profile).
+    Supports wildcard patterns:
+    - /users/*/profile: Matches /users/123/profile, but NOT /users/123/profile/extra
+    - /webhook/jumio/*: Matches /webhook/jumio/validation, /webhook/jumio/confirm, etc.
 
     Args:
         api_name: Name of the API.
@@ -535,13 +630,23 @@ def is_endpoint_whitelisted(
         if path == endpoint_pattern:
             return True
 
-        # Wildcard pattern matching (simple)
+        # Wildcard pattern matching
         if '*' in endpoint_pattern:
-            # Convert pattern to regex: /users/*/profile -> /users/.+/profile
-            regex_pattern = endpoint_pattern.replace('*', '.+')
-            regex_pattern = f"^{regex_pattern}$"
-            if re.match(regex_pattern, path):
-                return True
+            # Case 1: Pattern ends with /* (prefix match for subpaths)
+            # Example: /webhook/jumio/* matches /webhook/jumio/validation, /webhook/jumio/validation/confirm, etc.
+            if endpoint_pattern.endswith('/*'):
+                prefix = endpoint_pattern[:-2]  # Remove the /*
+                # Only match if path starts with prefix/ (at least one segment after the prefix)
+                # Also exclude the case where path is just the prefix with trailing slash
+                if path.startswith(prefix + '/') and path != prefix + '/':
+                    return True
+            else:
+                # Case 2: Pattern with * in the middle (positional wildcard)
+                # Example: /users/*/profile matches /users/123/profile but NOT /users/123/profile/extra
+                regex_pattern = endpoint_pattern.replace('*', '[^/]+')  # Match anything except /
+                regex_pattern = f"^{regex_pattern}$"
+                if re.match(regex_pattern, path):
+                    return True
 
     return False
 
@@ -699,6 +804,16 @@ def analyze_resource_methods(
             elif 'customer' in lower_name:
                 specific_auth_type = "CUSTOMER"
 
+        # Get integration details (endpoint URL)
+        try:
+            integration_info = get_integration_details(api_id, resource_id, method)
+            endpoint_url_raw = integration_info.get('uri', '') if integration_info else ''
+            # Clean endpoint URL to remove stage variables and domain
+            endpoint_url_clean = clean_endpoint_url(endpoint_url_raw)
+        except Exception:
+            # If integration details fail, just use empty string
+            endpoint_url_clean = ''
+
         method_auth = {
             'path': path,
             'resource_id': resource_id,
@@ -708,7 +823,8 @@ def analyze_resource_methods(
             'authorizerId': auth_info.get('authorizerId'),
             'authorizerName': authorizer_name,
             'identitySource': auth_info.get('identitySource'),
-            'apiKeyRequired': auth_info.get('apiKeyRequired')
+            'apiKeyRequired': auth_info.get('apiKeyRequired'),
+            'endpointUrl': endpoint_url_clean
         }
 
         result_methods.append(method_auth)
@@ -1272,7 +1388,8 @@ def create_consolidated_report_file(api_name: Optional[str] = None) -> Optional[
                     'authorization_type',
                     'authorizer_name',
                     'api_key',
-                    'whitelist'
+                    'whitelist',
+                    'endpoint_url'
                 ]
             )
             writer.writeheader()
@@ -1316,6 +1433,9 @@ def update_report_file(
         # Check for API Key requirement
         has_api_key = resource_data.get("apiKeyRequired", False)
 
+        # Get integration details (endpoint URL)
+        endpoint_url = resource_data.get('endpointUrl', '')
+
         # Prepare row for CSV
         row = {
             'api': api_name,
@@ -1327,7 +1447,8 @@ def update_report_file(
             ),
             'authorizer_name': resource_data.get('authorizerName') or 'NONE',
             'api_key': 'YES' if has_api_key else 'NO',
-            'whitelist': whitelist_source
+            'whitelist': whitelist_source,
+            'endpoint_url': endpoint_url
         }
 
         # Add row to CSV
@@ -1342,7 +1463,8 @@ def update_report_file(
                     'authorization_type',
                     'authorizer_name',
                     'api_key',
-                    'whitelist'
+                    'whitelist',
+                    'endpoint_url'
                 ]
             )
             writer.writerow(row)

@@ -14,6 +14,7 @@ Automated security scanning and compliance auditing for AWS API Gateway resource
 - ✅ **CSV Reports**: Real-time detailed reporting
 - ✅ **API Key Detection**: Separate column for API Key requirements
 - ✅ **Configurable Performance**: Adjustable worker pool sizes
+- ✅ **Integration Endpoint Analysis**: Extracts endpoint URLs from Integration request settings
 
 ## Quick Start
 
@@ -45,20 +46,27 @@ apiguardian
 **Columns:**
 - `api` - API Gateway name
 - `method` - HTTP method (GET, POST, PUT, DELETE, PATCH)
-- `path` - Endpoint path
+- `path` - Endpoint path from API Gateway
 - `is_authorized` - Has robust authorization (Cognito, Lambda, AWS IAM)
 - `authorization_type` - Authorization type (NONE, COGNITO_USER_POOLS, CUSTOM, AWS_IAM)
-- `specific_auth_type` - Specific type (ADMIN, CUSTOMER, NONE)
 - `authorizer_name` - Authorizer name (or NONE)
 - `api_key` - Requires API Key (YES/NO)
-- `whitelisted` - In whitelist (YES/NO)
+- `whitelist` - Whitelist source (NO, PUBLIC, INTERCEPTOR, BOTH)
+- `endpoint_url` - Integration request endpoint URL (cleaned, without domain/stage variables)
 
 **Example:**
 ```csv
-api,method,path,is_authorized,authorization_type,specific_auth_type,authorizer_name,api_key,whitelisted
-MS-Discounts-Public-PROD,GET,/campaigns,YES,COGNITO_USER_POOLS,ADMIN,AdminProd,NO,NO
-MS-Auth-Server-Public-PROD,POST,/oauth/token,NO,NONE,NONE,NONE,NO,YES
+api,method,path,is_authorized,authorization_type,authorizer_name,api_key,whitelist,endpoint_url
+MS-Discounts-Public-PROD,PUT,/bo/campaigns/campaign-active,YES,COGNITO_USER_POOLS,AdminProd,NO,NO,/discounts/bo/campaigns/campaign-active
+MS-Discounts-Public-PROD,GET,/customer/referral-info/{customerId},YES,COGNITO_USER_POOLS,AdminProd,NO,NO,/discounts/v1/customer/referral-info/{customerId}
+MS-Discounts-Public-PROD,POST,/customer/referral/double-check,NO,NONE,NONE,NO,NO,/discounts/v1/customer/referral/double-check
+MS-Auth-Server-Public-PROD,POST,/oauth/token,NO,NONE,NONE,NO,PUBLIC,/auth/oauth/token
 ```
+
+**Note on `endpoint_url`:**
+- Stage variables like `${stageVariables.urlDiscountsPrivate}` are removed, keeping only the path portion
+- Original: `https://${stageVariables.urlDiscountsPrivate}/discounts/bo/campaigns`
+- Cleaned: `/discounts/bo/campaigns`
 
 ## Whitelist Configuration
 
@@ -92,13 +100,13 @@ Exclude endpoints that have authentication in the microservice backend (not API 
 ## Performance
 
 **Cache Building:**
-- Phase 1 (Resource Scanning): Parallel (10 workers default)
+- Phase 1 (Resource Scanning): Parallel (30 workers default)
 - Phase 2 (Authorizer Caching): Parallel (auto-scaled)
 - **Speed**: 116 resources, 4 authorizers in 10-15 seconds (60-70% faster than sequential)
 
 **Resource Analysis:**
-- Configurable pool size (1-10 workers)
-- Default: 5 workers
+- Configurable pool size (1-30 workers)
+- Default: 30 workers
 - Processing: As-completed pattern for real-time updates
 
 ## Architecture

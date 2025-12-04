@@ -1,0 +1,42 @@
+{
+  "description": "Whitelist SEGURIDAD_POR_IP - Endpoints protegidos por whitelist de IPs o VPC",
+  "type": "SEGURIDAD_POR_IP",
+  "notes": [
+    "Endpoints que están protegidos mediante restricción de IPs o VPC endpoint",
+    "La seguridad se implementa a nivel de red/infraestructura",
+    "Ejemplos: APIs internas, endpoints de partners con IPs fijas",
+    "Se soportan dos patrones de wildcard:",
+    "  - /path/*: Coincide con /path/anything y /path/sub/paths (prefix matching)",
+    "  - /path/*/resource: Coincide con /path/123/resource pero NO /path/123/resource/extra",
+    "Formato: Cada entrada debe especificar el método HTTP y el path",
+    "Si un path tiene diferentes métodos con diferente seguridad, se agregan por separado"
+  ],
+  "examples": {
+    "example-api-name": [
+      {
+        "method": "GET",
+        "path": "/internal/metrics",
+        "comment": "Solo accesible desde VPC interna"
+      },
+      {
+        "method": "POST",
+        "path": "/partner/data-sync",
+        "comment": "IP del partner whitelisted"
+      },
+      {
+        "method": "PUT",
+        "path": "/admin/config/*",
+        "comment": "Solo IPs de oficina"
+      }
+    ]
+  },
+  "whitelist": {
+    "MS-Discounts-Public-PROD": [
+      {
+        "method": "POST",
+        "path": "/webhooks",
+        "comment": "IP del proveedor whitelisted"
+      }
+    ]
+  }
+}

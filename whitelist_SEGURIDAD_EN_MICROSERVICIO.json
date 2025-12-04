@@ -1,0 +1,65 @@
+{
+  "description": "Whitelist SEGURIDAD_EN_MICROSERVICIO - Endpoints que tienen autenticación implementada en el microservicio backend",
+  "type": "SEGURIDAD_EN_MICROSERVICIO",
+  "notes": [
+    "Endpoints que tienen autenticación/autorización implementada en el microservicio backend",
+    "La seguridad no está en API Gateway sino en la aplicación",
+    "Se soportan dos patrones de wildcard:",
+    "  - /path/*: Coincide con /path/anything y /path/sub/paths (prefix matching)",
+    "  - /path/*/resource: Coincide con /path/123/resource pero NO /path/123/resource/extra",
+    "Formato: Cada entrada debe especificar el método HTTP y el path",
+    "Si un path tiene diferentes métodos con diferente seguridad, se agregan por separado"
+  ],
+  "examples": {
+    "example-api-name": [
+      {
+        "method": "POST",
+        "path": "/auth/login",
+        "comment": "Autenticación manejada por el microservicio"
+      },
+      {
+        "method": "GET",
+        "path": "/webhook/jumio/*",
+        "comment": "Verificación de firma en backend"
+      },
+      {
+        "method": "POST",
+        "path": "/notifications/*/confirm",
+        "comment": "Token validado en microservicio"
+      }
+    ]
+  },
+  "whitelist": {
+    "MS-Identification-Provider-PROD": [
+      {
+        "method": "POST",
+        "path": "/identification/*/verify",
+        "comment": "Verificación con token interno"
+      },
+      {
+        "method": "GET",
+        "path": "/identification/check",
+        "comment": "Verificación con API key en headers"
+      }
+    ],
+    "Partner-Comafi": [
+      {
+        "method": "POST",
+        "path": "/comafi/webhook",
+        "comment": "Validación de firma HMAC"
+      },
+      {
+        "method": "POST",
+        "path": "/comafi/callback",
+        "comment": "Token de sesión validado"
+      }
+    ],
+    "Quotes-Partner-API": [
+      {
+        "method": "POST",
+        "path": "/quote",
+        "comment": "API Key validada en backend"
+      }
+    ]
+  }
+}

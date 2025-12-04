@@ -566,47 +566,60 @@ def clean_endpoint_url(url: str) -> str:
 # SECCIÓN 2: FILTRADO DE APIs Y MÉTODOS
 # ===================================================================
 
-def load_whitelist() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+def load_whitelist() -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]], Dict[str, List[Dict]]]:
     """
-    Load whitelists from PUBLIC and INTERCEPTOR files.
+    Load whitelists from the 3 security category files.
 
     Returns:
-        Tuple of (public_whitelist, interceptor_whitelist) dictionaries.
+        Tuple of (no_requiere_seguridad, seguridad_en_microservicio, seguridad_por_ip) dictionaries.
+        Each dict maps API names to lists of endpoint objects with 'method' and 'path' keys.
         Empty dicts if files don't exist or have errors.
     """
-    public_whitelist = {}
-    interceptor_whitelist = {}
+    no_requiere_seguridad = {}
+    seguridad_en_microservicio = {}
+    seguridad_por_ip = {}
 
     try:
-        # Load PUBLIC whitelist
-        public_file = Path(__file__).parent / "whitelist_PUBLIC.json"
-        if public_file.exists():
-            with open(public_file, 'r', encoding='utf-8') as f:
+        # Load NO_REQUIERE_SEGURIDAD whitelist
+        file1 = Path(__file__).parent / "whitelist_NO_REQUIERE_SEGURIDAD.json"
+        if file1.exists():
+            with open(file1, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                public_whitelist = data.get('whitelist', {})
+                no_requiere_seguridad = data.get('whitelist', {})
     except Exception as e:
-        log_warning(f"Failed to load PUBLIC whitelist: {str(e)}")
+        log_warning(f"Failed to load NO_REQUIERE_SEGURIDAD whitelist: {str(e)}")
 
     try:
-        # Load INTERCEPTOR whitelist
-        interceptor_file = Path(__file__).parent / "whitelist_INTERCEPTOR.json"
-        if interceptor_file.exists():
-            with open(interceptor_file, 'r', encoding='utf-8') as f:
+        # Load SEGURIDAD_EN_MICROSERVICIO whitelist
+        file2 = Path(__file__).parent / "whitelist_SEGURIDAD_EN_MICROSERVICIO.json"
+        if file2.exists():
+            with open(file2, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                interceptor_whitelist = data.get('whitelist', {})
+                seguridad_en_microservicio = data.get('whitelist', {})
     except Exception as e:
-        log_warning(f"Failed to load INTERCEPTOR whitelist: {str(e)}")
+        log_warning(f"Failed to load SEGURIDAD_EN_MICROSERVICIO whitelist: {str(e)}")
 
-    return public_whitelist, interceptor_whitelist
+    try:
+        # Load SEGURIDAD_POR_IP whitelist
+        file3 = Path(__file__).parent / "whitelist_SEGURIDAD_POR_IP.json"
+        if file3.exists():
+            with open(file3, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                seguridad_por_ip = data.get('whitelist', {})
+    except Exception as e:
+        log_warning(f"Failed to load SEGURIDAD_POR_IP whitelist: {str(e)}")
+
+    return no_requiere_seguridad, seguridad_en_microservicio, seguridad_por_ip
 
 
 def is_endpoint_whitelisted(
     api_name: str,
+    method: str,
     path: str,
-    whitelist: Dict[str, List[str]]
+    whitelist: Dict[str, List[Dict]]
 ) -> bool:
     """
-    Check if an endpoint is in the whitelist.
+    Check if an endpoint (method + path) is in the whitelist.
 
     Supports wildcard patterns:
     - /users/*/profile: Matches /users/123/profile, but NOT /users/123/profile/extra
@@ -614,8 +627,9 @@ def is_endpoint_whitelisted(
 
     Args:
         api_name: Name of the API.
+        method: HTTP method (GET, POST, PUT, DELETE, etc.).
         path: Resource path (e.g., /users/123/profile).
-        whitelist: Whitelist dictionary.
+        whitelist: Whitelist dictionary mapping API names to lists of endpoint dicts.
 
     Returns:
         True if endpoint is whitelisted, False otherwise.
@@ -625,7 +639,23 @@ def is_endpoint_whitelisted(
 
     whitelisted_endpoints = whitelist[api_name]
 
-    for endpoint_pattern in whitelisted_endpoints:
+    for endpoint_entry in whitelisted_endpoints:
+        # Handle both old format (string) and new format (dict with method and path)
+        if isinstance(endpoint_entry, str):
+            # Legacy format - only path, no method check
+            endpoint_pattern = endpoint_entry
+        elif isinstance(endpoint_entry, dict):
+            # New format - check method first
+            endpoint_method = endpoint_entry.get('method', '').upper()
+            endpoint_pattern = endpoint_entry.get('path', '')
+
+            # Method must match (case-insensitive)
+            if endpoint_method != method.upper():
+                continue
+        else:
+            # Unknown format, skip
+            continue
+
         # Exact match
         if path == endpoint_pattern:
             return True
@@ -653,36 +683,45 @@ def is_endpoint_whitelisted(
 
 def get_whitelist_source(
     api_name: str,
+    method: str,
     path: str,
-    public_whitelist: Dict[str, List[str]],
-    interceptor_whitelist: Dict[str, List[str]]
+    no_requiere_seguridad: Dict[str, List[Dict]],
+    seguridad_en_microservicio: Dict[str, List[Dict]],
+    seguridad_por_ip: Dict[str, List[Dict]]
 ) -> str:
     """
     Determine whitelist source(s) for an endpoint.
 
-    Returns "PUBLIC", "INTERCEPTOR", "BOTH", or "NO" depending on
-    where the endpoint appears in the whitelists.
+    Returns the security category where the endpoint appears, or combinations if in multiple.
+    Possible values: "NO_REQUIERE_SEGURIDAD", "SEGURIDAD_EN_MICROSERVICIO",
+    "SEGURIDAD_POR_IP", or combinations like "NO_REQUIERE_SEGURIDAD+SEGURIDAD_POR_IP", or "NO".
 
     Args:
         api_name: Name of the API.
+        method: HTTP method (GET, POST, PUT, DELETE, etc.).
         path: Resource path.
-        public_whitelist: PUBLIC whitelist dictionary.
-        interceptor_whitelist: INTERCEPTOR whitelist dictionary.
+        no_requiere_seguridad: NO_REQUIERE_SEGURIDAD whitelist dictionary.
+        seguridad_en_microservicio: SEGURIDAD_EN_MICROSERVICIO whitelist dictionary.
+        seguridad_por_ip: SEGURIDAD_POR_IP whitelist dictionary.
 
     Returns:
-        Whitelist source: "PUBLIC", "INTERCEPTOR", "BOTH", or "NO".
+        Whitelist source: category name, combination with "+", or "NO".
     """
-    in_public = is_endpoint_whitelisted(api_name, path, public_whitelist)
-    in_interceptor = is_endpoint_whitelisted(
-        api_name, path, interceptor_whitelist
-    )
+    in_no_requiere = is_endpoint_whitelisted(api_name, method, path, no_requiere_seguridad)
+    in_microservicio = is_endpoint_whitelisted(api_name, method, path, seguridad_en_microservicio)
+    in_por_ip = is_endpoint_whitelisted(api_name, method, path, seguridad_por_ip)
 
-    if in_public and in_interceptor:
-        return "BOTH"
-    elif in_public:
-        return "PUBLIC"
-    elif in_interceptor:
-        return "INTERCEPTOR"
+    # Build result based on which whitelists contain this endpoint
+    sources = []
+    if in_no_requiere:
+        sources.append("NO_REQUIERE_SEGURIDAD")
+    if in_microservicio:
+        sources.append("SEGURIDAD_EN_MICROSERVICIO")
+    if in_por_ip:
+        sources.append("SEGURIDAD_POR_IP")
+
+    if sources:
+        return "+".join(sources)
     else:
         return "NO"
 
@@ -747,14 +786,15 @@ def analyze_resource_methods(
     report_file: Optional[Path] = None,
     api_name: Optional[str] = None,
     authorizer_cache: Optional[Dict[str, Dict]] = None,
-    public_whitelist: Optional[Dict[str, List[str]]] = None,
-    interceptor_whitelist: Optional[Dict[str, List[str]]] = None
+    no_requiere_seguridad: Optional[Dict[str, List[Dict]]] = None,
+    seguridad_en_microservicio: Optional[Dict[str, List[Dict]]] = None,
+    seguridad_por_ip: Optional[Dict[str, List[Dict]]] = None
 ) -> Dict:
     """
     Analyze methods for a resource sequentially.
 
     Helper function for analyzing individual resources.
-    Skips endpoints that are whitelisted.
+    Reports whitelist category for each endpoint based on method + path.
 
     Args:
         api_id: API ID.
@@ -763,7 +803,9 @@ def analyze_resource_methods(
         report_file: Path to report file (optional).
         api_name: API name for reporting (optional).
         authorizer_cache: Cache of authorizer details.
-        whitelist: Whitelist dictionary for excluding endpoints (optional).
+        no_requiere_seguridad: NO_REQUIERE_SEGURIDAD whitelist dictionary (optional).
+        seguridad_en_microservicio: SEGURIDAD_EN_MICROSERVICIO whitelist dictionary (optional).
+        seguridad_por_ip: SEGURIDAD_POR_IP whitelist dictionary (optional).
 
     Returns:
         Dictionary with resource analysis result.
@@ -832,12 +874,14 @@ def analyze_resource_methods(
         # Update report in real-time (include whitelist source)
         if report_file and api_name:
             whitelist_source = "NO"
-            if public_whitelist or interceptor_whitelist:
+            if no_requiere_seguridad or seguridad_en_microservicio or seguridad_por_ip:
                 whitelist_source = get_whitelist_source(
                     api_name,
+                    method,  # Now passing the HTTP method
                     path,
-                    public_whitelist or {},
-                    interceptor_whitelist or {}
+                    no_requiere_seguridad or {},
+                    seguridad_en_microservicio or {},
+                    seguridad_por_ip or {}
                 )
             # Pass whitelist source to report
             method_auth['whitelist_source'] = whitelist_source
@@ -1081,15 +1125,16 @@ def check_api_security(
     report_file: Optional[Path] = None,
     use_resource_pool: bool = True,
     resource_pool_size: int = 5,
-    public_whitelist: Optional[Dict[str, List[str]]] = None,
-    interceptor_whitelist: Optional[Dict[str, List[str]]] = None
+    no_requiere_seguridad: Optional[Dict[str, List[Dict]]] = None,
+    seguridad_en_microservicio: Optional[Dict[str, List[Dict]]] = None,
+    seguridad_por_ip: Optional[Dict[str, List[Dict]]] = None
 ) -> Dict:
     """
     Review API resources and identify those without authorizer.
 
     With OPTIONS method filtering and real-time report updates.
     Uses concurrent analysis for resources within each API.
-    Skips whitelisted endpoints.
+    Reports whitelist category for each endpoint based on method + path.
 
     Args:
         api_id: API ID.
@@ -1099,7 +1144,9 @@ def check_api_security(
         report_file: Path to report file for real-time updates (optional).
         use_resource_pool: Use ThreadPool for parallel resource analysis (default: True).
         resource_pool_size: Pool size for resources within this API (default: 5, configurable).
-        whitelist: Whitelist dictionary for excluding endpoints (optional).
+        no_requiere_seguridad: NO_REQUIERE_SEGURIDAD whitelist dictionary (optional).
+        seguridad_en_microservicio: SEGURIDAD_EN_MICROSERVICIO whitelist dictionary (optional).
+        seguridad_por_ip: SEGURIDAD_POR_IP whitelist dictionary (optional).
 
     Returns:
         Dictionary with analysis result.
@@ -1173,8 +1220,9 @@ def check_api_security(
                 report_file,
                 api_name,
                 authorizer_cache,
-                public_whitelist,
-                interceptor_whitelist
+                no_requiere_seguridad,
+                seguridad_en_microservicio,
+                seguridad_por_ip
             )
             future_to_resource[future] = (resource_id, path)
 
@@ -1591,7 +1639,7 @@ def analyze_apis_sequentially(
     before moving to the next API. This prevents output confusion and ensures
     clean reporting per API.
 
-    Skips endpoints that are whitelisted in PUBLIC and INTERCEPTOR configs.
+    Reports whitelist category for each endpoint based on method + path combination.
 
     Args:
         apis: List of APIs to analyze.
@@ -1605,20 +1653,27 @@ def analyze_apis_sequentially(
     total_apis = len(apis)
 
     # Load whitelists once at the beginning
-    public_whitelist, interceptor_whitelist = load_whitelist()
+    no_requiere_seguridad, seguridad_en_microservicio, seguridad_por_ip = load_whitelist()
 
-    if public_whitelist:
-        num_public = sum(len(v) for v in public_whitelist.values())
+    if no_requiere_seguridad:
+        num_endpoints = sum(len(v) for v in no_requiere_seguridad.values())
         log_info(
-            f"Loaded PUBLIC whitelist with {len(public_whitelist)} "
-            f"API(s) and {num_public} endpoint(s)"
+            f"Loaded NO_REQUIERE_SEGURIDAD whitelist with {len(no_requiere_seguridad)} "
+            f"API(s) and {num_endpoints} endpoint(s)"
         )
 
-    if interceptor_whitelist:
-        num_interceptor = sum(len(v) for v in interceptor_whitelist.values())
+    if seguridad_en_microservicio:
+        num_endpoints = sum(len(v) for v in seguridad_en_microservicio.values())
         log_info(
-            f"Loaded INTERCEPTOR whitelist with {len(interceptor_whitelist)} "
-            f"API(s) and {num_interceptor} endpoint(s)"
+            f"Loaded SEGURIDAD_EN_MICROSERVICIO whitelist with {len(seguridad_en_microservicio)} "
+            f"API(s) and {num_endpoints} endpoint(s)"
+        )
+
+    if seguridad_por_ip:
+        num_endpoints = sum(len(v) for v in seguridad_por_ip.values())
+        log_info(
+            f"Loaded SEGURIDAD_POR_IP whitelist with {len(seguridad_por_ip)} "
+            f"API(s) and {num_endpoints} endpoint(s)"
         )
 
     # Process each API sequentially
@@ -1636,8 +1691,9 @@ def analyze_apis_sequentially(
                 report_file=report_file,
                 use_resource_pool=True,
                 resource_pool_size=resource_pool_size,
-                public_whitelist=public_whitelist,
-                interceptor_whitelist=interceptor_whitelist
+                no_requiere_seguridad=no_requiere_seguridad,
+                seguridad_en_microservicio=seguridad_en_microservicio,
+                seguridad_por_ip=seguridad_por_ip
             )
             results.append(result)
         except Exception as e:

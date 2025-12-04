@@ -1,0 +1,41 @@
+{
+  "description": "Whitelist NO_REQUIERE_SEGURIDAD - Endpoints públicos que no requieren autenticación por diseño",
+  "type": "NO_REQUIERE_SEGURIDAD",
+  "notes": [
+    "Endpoints que son públicos por naturaleza y no requieren autenticación",
+    "Ejemplos: health checks, endpoints de información pública, webhooks públicos",
+    "Se soportan dos patrones de wildcard:",
+    "  - /path/*: Coincide con /path/anything y /path/sub/paths (prefix matching)",
+    "  - /path/*/resource: Coincide con /path/123/resource pero NO /path/123/resource/extra",
+    "Formato: Cada entrada debe especificar el método HTTP y el path",
+    "Si un path tiene diferentes métodos con diferente seguridad, se agregan por separado"
+  ],
+  "examples": {
+    "example-api-name": [
+      {
+        "method": "POST",
+        "path": "/oauth/token",
+        "comment": "Endpoint de autenticación público"
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "comment": "Health check"
+      },
+      {
+        "method": "POST",
+        "path": "/webhook/validation/*",
+        "comment": "Webhooks públicos"
+      }
+    ]
+  },
+  "whitelist": {
+    "MS-Discounts-Public-PROD": [
+      {
+        "method": "POST",
+        "path": "/webhooks",
+        "comment": "Webhook público para descuentos"
+      }
+    ]
+  }
+}

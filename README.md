@@ -71,31 +71,71 @@ MS-Auth-Server-Public-PROD,POST,/oauth/token,NO,NONE,NONE,NO,PUBLIC,/auth/oauth/
 ## Whitelist Configuration
 
 ### Purpose
-Exclude endpoints that have authentication in the microservice backend (not API Gateway).
+Categorize endpoints that have alternative security mechanisms outside of API Gateway authorization.
 
-### File Location
-`apiguardian/whitelist.json`
+### Three Security Categories
 
-### Format
+API Guardian now supports 3 whitelist categories:
+
+1. **`whitelist_NO_REQUIERE_SEGURIDAD.json`**
+   - Public endpoints by design (health checks, public webhooks, etc.)
+   - No authentication required
+
+2. **`whitelist_SEGURIDAD_EN_MICROSERVICIO.json`**
+   - Authentication implemented in backend microservice
+   - Security handled by the application, not API Gateway
+
+3. **`whitelist_SEGURIDAD_POR_IP.json`**
+   - Protected by IP whitelist or VPC endpoint
+   - Network-level security
+
+### Format (v2.0)
+
+**New format with HTTP method granularity:**
+
 ```json
 {
   "whitelist": {
     "MS-Auth-Server-Public-PROD": [
-      "/oauth/token",
-      "/oauth/validate"
+      {
+        "method": "POST",
+        "path": "/oauth/token",
+        "comment": "Public authentication endpoint"
+      },
+      {
+        "method": "GET",
+        "path": "/oauth/validate",
+        "comment": "Token validation with signature check"
+      }
     ],
     "MS-jumio-Public-PROD": [
-      "/jumio/verification/*"
+      {
+        "method": "POST",
+        "path": "/jumio/verification/*",
+        "comment": "Webhook with HMAC signature validation"
+      }
     ]
   }
 }
 ```
 
-### Features
+### Key Features
+
+- **Method + Path Matching**: Different HTTP methods on the same path can have different security levels
+  - Example: `GET /products` (public) vs `POST /products` (requires auth)
 - **Exact match**: `/oauth/token` matches exactly
-- **Wildcard patterns**: `/jumio/verification/*` matches `/jumio/verification/123`
-- **Auto-loaded**: Whitelist loads automatically at startup
-- **CSV indicator**: Whitelisted endpoints marked as `whitelisted=YES`
+- **Wildcard patterns**:
+  - `/jumio/verification/*` matches `/jumio/verification/123` and `/jumio/verification/abc/confirm`
+  - `/users/*/profile` matches `/users/123/profile` but NOT `/users/123/profile/settings`
+- **Auto-loaded**: All 3 whitelists load automatically at startup
+- **CSV indicator**: Shows security category in `whitelist` column
+  - Possible values: `NO`, `NO_REQUIERE_SEGURIDAD`, `SEGURIDAD_EN_MICROSERVICIO`, `SEGURIDAD_POR_IP`, or combinations with `+`
+- **Documentation**: `comment` field explains why endpoint is whitelisted
+- **Backward compatible**: Old format (path-only) still supported
+
+### Migration from v1.0
+
+See `CHANGELOG_WHITELIST.md` for detailed migration guide and examples.
 
 ## Performance
 
